@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>menger</title>
+<link rel="icon" href="menger.svg" type="image/svg+xml">
+<link rel="stylesheet" href="launcher.css">
+<script src="launcher.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <img src="menger.svg" alt="" width="56" height="56">
+    <h1>menger</h1>
+    <p class="tag">Where are your tickets?</p>
+  </header>
+
+  <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+
+  <section class="choice" aria-labelledby="local-h">
+    <div>
+      <h2 id="local-h">Local</h2>
+      <p>Tickets on this device. menger runs inside the app; nothing leaves this computer.</p>
+      <p class="fine" id="local-where"></p>
+    </div>
+    <button id="local" type="button" class="primary">Open local</button>
+  </section>
+
+  <form class="choice" id="remote-form" aria-labelledby="remote-h" novalidate>
+    <div>
+      <h2 id="remote-h">Remote</h2>
+      <p>A menger server at an address.</p>
+      <label for="remote-url" class="visually-hidden">Server address</label>
+      <input id="remote-url" name="url" type="url" inputmode="url" autocomplete="url" spellcheck="false"
+             placeholder="https://menger.example" required>
+    </div>
+    <button id="remote" type="submit">Connect</button>
+  </form>
+
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <footer>
+    <span id="version"></span> · Switch server any time: the <kbd>⇄</kbd> in a corner of the page, or <em>Server → Switch…</em>
+  </footer>
+</main>
+</body>
+</html>

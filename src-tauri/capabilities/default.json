@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The launcher (the bundled page) in the main window. Remote and local menger pages are not local and get no IPC: the switch control navigates instead.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

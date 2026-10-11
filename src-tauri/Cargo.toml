@@ -1,0 +1,40 @@
+[package]
+name = "menger-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "menger as a desktop app — local tickets on this device, or a menger at a URL"
+repository = "https://github.com/hypermemetic-ai/menger-desktop"
+publish = false
+
+[lib]
+# The library is the app; main.rs only calls `run()`. Mobile (DIST-6) links
+# the same library as a staticlib (iOS) / cdylib (Android).
+name = "menger_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# menger from crates.io, the app's build embedded (DIST-3): the whole server
+# as a library call, `menger::local::LocalServer`.
+menger = { version = "0.5", features = ["embedded-app"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+url = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The launcher's reachability check of a remote menger.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
