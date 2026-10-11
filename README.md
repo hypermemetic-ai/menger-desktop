@@ -58,6 +58,7 @@ server's shell URL is logged at start.
 ```
 src-tauri/          the app (Rust crate `menger-desktop`)
   src/lib.rs        run(): window, launcher commands, local server, switching
+  src/update.rs     the self-update check (desktop)
   src/main.rs       desktop entry point — calls run()
   src/settings.rs   the remembered choice
   src/switch.js     the injected Switch-server control
@@ -67,6 +68,7 @@ src-tauri/          the app (Rust crate `menger-desktop`)
 ui/                 the launcher — plain HTML/CSS/JS, no build step
 docker/             Linux build image
 scripts/            build-linux.sh
+.github/workflows/  release.yml (a v* tag → signed bundles + latest.json), ci.yml
 ```
 
 `run()` is `#[cfg_attr(mobile, tauri::mobile_entry_point)]`, so iOS and
@@ -112,6 +114,49 @@ Gatekeeper and Windows SmartScreen will ask before the first run.
 
 **Running from source** — `cd src-tauri && cargo tauri dev`, on a host with
 the prerequisites.
+
+## Releases and updates
+
+The desktop builds update themselves (`tauri-plugin-updater`). On start the
+app checks
+`https://github.com/hypermemetic-ai/menger-desktop/releases/latest/download/latest.json`
+in the background; if a newer version is there it asks — version and release
+notes, *Install and restart* or *Later* — then downloads it, checks its
+signature, installs it and relaunches. *Help → Check for updates…* asks on
+demand. A failed check (offline, no release yet, a bad signature) is logged
+and never stops the app. iOS and Android update through their stores
+(later).
+
+Every bundle is signed for the updater with a minisign key
+(`cargo tauri signer generate`): the public key is in `tauri.conf.json`
+(`plugins.updater.pubkey`); the private key and its password are the
+repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, kept by the owner outside the
+repository and never committed. Losing the private key means installed apps
+can no longer be updated — keep a copy.
+
+**Cutting a release:**
+
+1. bump `version` in `src-tauri/Cargo.toml` (`tauri.conf.json` has no
+   version — it follows Cargo.toml), and commit;
+2. `git tag vX.Y.Z` (the tag must be `v` + that version) and
+   `git push origin vX.Y.Z`.
+
+`.github/workflows/release.yml` then creates the tag's release, builds with
+`tauri-action` on `ubuntu-22.04`, `macos-latest` (`aarch64-apple-darwin` and
+`x86_64-apple-darwin`) and `windows-latest`, uploads every bundle with its
+`.sig` and `latest.json` (one entry per platform), and checks that
+`latest.json` lists all four. The release is published, not a draft, so
+installed apps see it as soon as it lands. `ci.yml` runs fmt, clippy and the
+unit tests on every push.
+
+A signed local build: `scripts/build-linux.sh` passes
+`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` through
+when they are set, or reads `~/.tauri/menger-desktop.key` and
+`~/.tauri/menger-desktop.key.password` when present; the bundles then get
+`.sig` files beside them. Without a key, `cargo tauri build` fails at the
+signing step — set `TAURI_SIGNING_PRIVATE_KEY` or build with
+`--config '{"bundle":{"createUpdaterArtifacts":false}}'`.
 
 ## License
 

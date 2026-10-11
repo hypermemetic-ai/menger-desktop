@@ -33,6 +33,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
+# DIST-5: self-update from GitHub Releases (signed), relaunch, and the
+# dialog that asks first. iOS and Android update through their stores.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 
 [profile.release]
 codegen-units = 1

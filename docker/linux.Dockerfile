@@ -21,7 +21,7 @@ ENV RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \
     PATH=/opt/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --profile minimal --default-toolchain stable --component clippy \
+        | sh -s -- -y --profile minimal --default-toolchain stable --component clippy --component rustfmt \
     && cargo install tauri-cli --version "^2" --locked \
     && rm -rf /opt/cargo/registry /opt/cargo/git \
     && chmod -R a+rX /opt/rustup /opt/cargo

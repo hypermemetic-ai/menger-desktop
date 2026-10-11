@@ -15,6 +15,8 @@
 //! and answers by opening the launcher.
 
 mod settings;
+#[cfg(desktop)]
+mod update;
 
 use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
 use serde::Serialize;
@@ -71,7 +73,10 @@ impl AppState {
             s.remote_url = remote_url;
         }
         if let Err(e) = s.save(&self.settings_path) {
-            tracing::warn!("cannot save settings to {}: {e:#}", self.settings_path.display());
+            tracing::warn!(
+                "cannot save settings to {}: {e:#}",
+                self.settings_path.display()
+            );
         }
     }
 
@@ -82,12 +87,18 @@ impl AppState {
             return Ok(s.shell_url().parse()?);
         }
         if self.db_path.ends_with(PROD_DB) {
-            anyhow::bail!("refusing menger's production database {}", self.db_path.display());
+            anyhow::bail!(
+                "refusing menger's production database {}",
+                self.db_path.display()
+            );
         }
         let mut cfg = LocalConfig::new(&self.db_path);
         cfg.extra_origins = TAURI_ORIGINS.iter().map(|o| o.to_string()).collect();
         let s = LocalServer::start(cfg).await?;
-        if let Some(p) = [s.ws_port(), s.shell_port()].into_iter().find(|p| RESERVED_PORTS.contains(p)) {
+        if let Some(p) = [s.ws_port(), s.shell_port()]
+            .into_iter()
+            .find(|p| RESERVED_PORTS.contains(p))
+        {
             s.shutdown().await;
             anyhow::bail!("the local server was given port {p}, which belongs to menger's prod/test environments");
         }
@@ -164,7 +175,11 @@ async fn open_local(app: AppHandle, state: State<'_, AppState>) -> Result<String
 /// Remote mode: the URL checked and reached, the local server stopped, then
 /// the remote shell.
 #[tauri::command]
-async fn open_remote(app: AppHandle, state: State<'_, AppState>, url: String) -> Result<String, String> {
+async fn open_remote(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<String, String> {
     let url = parse_remote_url(&url)?;
     probe(&url).await?;
     state.stop_local().await;
@@ -183,7 +198,10 @@ async fn probe(url: &Url) -> Result<(), String> {
         .map_err(|e| format!("cannot make an HTTP client: {e}"))?;
     match client.get(url.clone()).send().await {
         Ok(r) if r.status().is_success() => Ok(()),
-        Ok(r) => Err(format!("{url} answered {} — is that a menger server?", r.status())),
+        Ok(r) => Err(format!(
+            "{url} answered {} — is that a menger server?",
+            r.status()
+        )),
         Err(e) => {
             let why = if e.is_timeout() {
                 "it did not answer within 8 seconds".to_string()
@@ -198,7 +216,9 @@ async fn probe(url: &Url) -> Result<(), String> {
 }
 
 fn navigate(app: &AppHandle, url: Url) -> Result<(), String> {
-    let win = app.get_webview_window(MAIN).ok_or("the main window is gone")?;
+    let win = app
+        .get_webview_window(MAIN)
+        .ok_or("the main window is gone")?;
     win.navigate(url).map_err(|e| e.to_string())
 }
 
@@ -240,26 +260,48 @@ fn on_navigation(app: AppHandle) -> impl Fn(&Url) -> bool + Send + 'static {
     }
 }
 
+/// The platform's default menu, plus *Server → Switch…* and *Check for
+/// updates…* (in Help where the default menu has one).
 #[cfg(desktop)]
 fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{Menu, MenuItem, Submenu};
+    use tauri::menu::{Menu, MenuItem, MenuItemKind, Submenu};
     let menu = Menu::default(app)?;
     let switch = MenuItem::with_id(app, "switch-server", "Switch…", true, None::<&str>)?;
     menu.append(&Submenu::with_items(app, "Server", true, &[&switch])?)?;
+    let updates = MenuItem::with_id(
+        app,
+        "check-updates",
+        "Check for updates…",
+        true,
+        None::<&str>,
+    )?;
+    let help = menu.items()?.into_iter().find_map(|item| match item {
+        MenuItemKind::Submenu(s) if s.text().is_ok_and(|t| t == "Help") => Some(s),
+        _ => None,
+    });
+    match help {
+        Some(help) => help.append(&updates)?,
+        None => menu.append(&Submenu::with_items(app, "Help", true, &[&updates])?)?,
+    }
     Ok(menu)
 }
 
 #[cfg(desktop)]
 fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
-    if event.id().as_ref() == "switch-server" {
-        switch_server(app);
+    match event.id().as_ref() {
+        "switch-server" => switch_server(app),
+        "check-updates" => update::spawn_check(app, true),
+        _ => {}
     }
 }
 
 fn init_logging() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn data_paths(app: &AppHandle) -> anyhow::Result<(PathBuf, PathBuf)> {
@@ -291,8 +333,15 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .initialization_script(SWITCH_SCRIPT)
         .on_navigation(on_navigation(handle.clone()));
     #[cfg(desktop)]
-    let builder = builder.title("menger").inner_size(1280.0, 860.0).min_inner_size(520.0, 400.0);
+    let builder = builder
+        .title("menger")
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(520.0, 400.0);
     builder.build()?;
+
+    // DIST-5: a background check on start; silent unless there is an update.
+    #[cfg(desktop)]
+    update::spawn_check(&handle, false);
     Ok(())
 }
 
@@ -309,15 +358,26 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .menu(menu)
         .on_menu_event(on_menu_event);
     let app = builder
-        .invoke_handler(tauri::generate_handler![launcher_state, open_local, open_remote])
+        .invoke_handler(tauri::generate_handler![
+            launcher_state,
+            open_local,
+            open_remote
+        ])
         .setup(setup)
         .build(tauri::generate_context!())
         .expect("error while building menger-desktop");
     app.run(|app, event| match event {
-        RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { .. }, .. } => {
+        RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { .. },
+            ..
+        } => {
             tracing::info!("window {label}: close requested");
         }
         RunEvent::Exit => {
@@ -338,6 +398,8 @@ mod tests {
     #[test]
     fn the_prod_database_is_recognised() {
         assert!(Path::new("/home/x/.local/share/menger/tickets.db").ends_with(PROD_DB));
-        assert!(!Path::new("/home/x/.local/share/ai.hypermemetic.menger/tickets.db").ends_with(PROD_DB));
+        assert!(
+            !Path::new("/home/x/.local/share/ai.hypermemetic.menger/tickets.db").ends_with(PROD_DB)
+        );
     }
 }
