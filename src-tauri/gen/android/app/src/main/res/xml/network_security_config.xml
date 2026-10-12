@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DIST-6: plain http only to loopback. Local mode's menger listens on
+  http://127.0.0.1:<port> (its shell) and ws://127.0.0.1:<port> (its
+  WebSocket); everything else — a remote menger — must be https. This file
+  governs cleartext on every API level the app supports (minSdk 24), so the
+  manifest's usesCleartextTraffic placeholder has no effect.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

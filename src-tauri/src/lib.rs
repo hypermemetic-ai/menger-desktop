@@ -86,6 +86,15 @@ impl AppState {
         if let Some(s) = server.as_ref() {
             return Ok(s.shell_url().parse()?);
         }
+        let s = self.start_server(0, 0).await?;
+        let url = s.shell_url().parse()?;
+        *server = Some(s);
+        Ok(url)
+    }
+
+    /// Starts menger on the given loopback ports (0: free ones) over the
+    /// local database.
+    async fn start_server(&self, shell_port: u16, ws_port: u16) -> anyhow::Result<LocalServer> {
         if self.db_path.ends_with(PROD_DB) {
             anyhow::bail!(
                 "refusing menger's production database {}",
@@ -93,6 +102,8 @@ impl AppState {
             );
         }
         let mut cfg = LocalConfig::new(&self.db_path);
+        cfg.shell_port = shell_port;
+        cfg.ws_port = ws_port;
         cfg.extra_origins = TAURI_ORIGINS.iter().map(|o| o.to_string()).collect();
         let s = LocalServer::start(cfg).await?;
         if let Some(p) = [s.ws_port(), s.shell_port()]
@@ -108,9 +119,74 @@ impl AppState {
             s.ws_url(),
             self.db_path.display()
         );
+        Ok(s)
+    }
+
+    /// Debug builds only: a file `debug-restart-on-resume` in the app's data
+    /// directory makes the next resume treat the local server as gone (and
+    /// is removed) — the restart path, which Android rarely needs, tried on
+    /// an emulator.
+    #[cfg(mobile)]
+    fn debug_pretend_dead(&self) -> bool {
+        if !cfg!(debug_assertions) {
+            return false;
+        }
+        let Some(flag) = self
+            .db_path
+            .parent()
+            .map(|d| d.join("debug-restart-on-resume"))
+        else {
+            return false;
+        };
+        let hit = std::fs::remove_file(&flag).is_ok();
+        if hit {
+            tracing::warn!(
+                "debug: {} — treating the local server as gone",
+                flag.display()
+            );
+        }
+        hit
+    }
+
+    /// DIST-6: back in the foreground (mobile). iOS suspends a backgrounded
+    /// app and may take its sockets with it; Android may too. When the local
+    /// server no longer answers on both ports it is stopped and started again
+    /// over the same database — on the same ports when they are free, else
+    /// on new ones — and this returns the old shell port and the new shell
+    /// URL, so the window can be re-pointed. `None`: no local server, or it
+    /// still answers (menger's app reconnects its own WebSocket).
+    #[cfg(mobile)]
+    async fn revive_local(&self) -> anyhow::Result<Option<(u16, Url)>> {
+        let mut server = self.server.lock().await;
+        let Some(s) = server.as_ref() else {
+            return Ok(None);
+        };
+        let (shell, ws) = (s.shell_port(), s.ws_port());
+        if !self.debug_pretend_dead() && answers_http(&s.shell_url()).await && answers_tcp(ws).await
+        {
+            tracing::info!(
+                "resumed: the local server still answers (shell {shell}, WebSocket {ws})"
+            );
+            return Ok(None);
+        }
+        tracing::warn!("resumed: the local server no longer answers (shell {shell}, WebSocket {ws}); restarting it");
+        let old = server.take().expect("checked above");
+        if tokio::time::timeout(Duration::from_secs(3), old.shutdown())
+            .await
+            .is_err()
+        {
+            tracing::warn!("the old local server did not stop within 3 s; abandoning it");
+        }
+        let s = match self.start_server(shell, ws).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::info!("ports {shell}/{ws} not free again ({e:#}); taking new ones");
+                self.start_server(0, 0).await?
+            }
+        };
         let url = s.shell_url().parse()?;
         *server = Some(s);
-        Ok(url)
+        Ok(Some((shell, url)))
     }
 
     /// Stops the local server, if one runs, and waits for its ports.
@@ -135,6 +211,8 @@ struct LauncherState {
     /// Where local mode keeps its tickets.
     db_path: String,
     version: String,
+    /// iOS / Android: no menu bar, and remote http:// only to this device.
+    mobile: bool,
 }
 
 #[tauri::command]
@@ -157,6 +235,7 @@ async fn launcher_state(
         local_url,
         db_path: state.db_path.display().to_string(),
         version: app.package_info().version.to_string(),
+        mobile: cfg!(mobile),
     })
 }
 
@@ -181,6 +260,14 @@ async fn open_remote(
     url: String,
 ) -> Result<String, String> {
     let url = parse_remote_url(&url)?;
+    // DIST-6: the mobile web views load plain http only from this device
+    // (Android's network security config, iOS's App Transport Security).
+    #[cfg(mobile)]
+    if url.scheme() == "http" && !settings::is_loopback(&url) {
+        return Err(format!(
+            "{url} is plain http:// to another host, which this device's web view refuses — only 127.0.0.1 and localhost may be http:// here. Use the server's https:// address."
+        ));
+    }
     probe(&url).await?;
     state.stop_local().await;
     state.remember(Choice::Remote, Some(url.to_string()));
@@ -213,6 +300,71 @@ async fn probe(url: &Url) -> Result<(), String> {
             Err(format!("Could not reach {url}: {why}."))
         }
     }
+}
+
+/// Whether an HTTP server answers at `url` within two seconds (any status).
+#[cfg(mobile)]
+async fn answers_http(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .no_proxy()
+        .build()
+    else {
+        return false;
+    };
+    client.get(url).send().await.is_ok()
+}
+
+/// Whether something accepts a connection on 127.0.0.1:`port` within two
+/// seconds.
+#[cfg(mobile)]
+async fn answers_tcp(port: u16) -> bool {
+    matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
+/// DIST-6: the app is in the foreground again (mobile) — make local mode
+/// usable: restart a local server that stopped answering, and point a
+/// window that showed it at the new one (the same path, so the reader is
+/// where they were; the page reloads either way).
+#[cfg(mobile)]
+fn on_resume(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        match state.revive_local().await {
+            Ok(None) => {}
+            Ok(Some((old_port, mut url))) => {
+                let Some(win) = app.get_webview_window(MAIN) else {
+                    return;
+                };
+                let Ok(current) = win.url() else { return };
+                let on_local = current.scheme() == "http"
+                    && current.host_str() == Some("127.0.0.1")
+                    && current.port() == Some(old_port);
+                if !on_local {
+                    return; // the launcher: "Return to local" opens the new one
+                }
+                url.set_path(current.path());
+                url.set_query(current.query());
+                url.set_fragment(current.fragment());
+                tracing::info!("re-pointing the window at the restarted local server: {url}");
+                if let Err(e) = win.navigate(url) {
+                    tracing::error!("cannot re-point the window: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::error!("cannot restart the local server: {e:#}");
+                switch_server(&app);
+            }
+        }
+    });
 }
 
 fn navigate(app: &AppHandle, url: Url) -> Result<(), String> {
@@ -301,6 +453,8 @@ fn init_logging() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
+        // Mobile: stderr goes to logcat / the device console, not a terminal.
+        .with_ansi(cfg!(desktop))
         .try_init();
 }
 
@@ -379,6 +533,16 @@ pub fn run() {
             ..
         } => {
             tracing::info!("window {label}: close requested");
+        }
+        // DIST-6: Android's onResume, iOS's applicationWillEnterForeground.
+        // (`RunEvent::Resumed` is the event loop's, not the app's.)
+        #[cfg(mobile)]
+        RunEvent::WindowEvent {
+            event: tauri::WindowEvent::Resumed,
+            ..
+        } => {
+            tracing::info!("app resumed");
+            on_resume(app);
         }
         RunEvent::Exit => {
             // Quitting stops the local server and releases its ports.

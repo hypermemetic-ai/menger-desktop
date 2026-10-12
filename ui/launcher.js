@@ -67,6 +67,11 @@ async function start() {
   }
   $("version").textContent = `menger-desktop ${state.version}`;
   $("local-where").textContent = `Stored in ${state.db_path}`;
+  if (state.mobile) {
+    $("device-word").textContent = "device";
+    $("menu-hint").hidden = true;
+    $("remote-hint").hidden = false;
+  }
   if (state.local_url) $("local").textContent = "Return to local";
   if (state.remote_url) $("remote-url").value = state.remote_url;
 
