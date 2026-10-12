@@ -38,7 +38,7 @@ jobs:
     env:
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-java@v5
         with:
@@ -120,7 +120,7 @@ jobs:
           done
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: menger-android-${{ steps.out.outputs.version }}
           path: dist/*
@@ -139,7 +139,7 @@ jobs:
     env:
       HAS_APPLE_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -172,7 +172,7 @@ jobs:
 
       - name: upload the generated Xcode project
         if: steps.init.outputs.generated == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ios-gen-apple
           path: src-tauri/gen/apple
@@ -219,7 +219,7 @@ jobs:
           cargo tauri ios build --target aarch64 --export-method app-store-connect --ci
           cp gen/apple/build/arm64/*.ipa "../dist/menger_${{ steps.out.outputs.version }}_ios.ipa"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: menger-ios-${{ steps.out.outputs.version }}
           path: dist/*

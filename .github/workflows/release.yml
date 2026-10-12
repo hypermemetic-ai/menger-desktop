@@ -37,7 +37,7 @@ jobs:
       release_id: ${{ steps.release.outputs.result }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: version
         name: version from Cargo.toml, checked against the tag
@@ -58,7 +58,7 @@ jobs:
       # race to create it; they upload into it by id.
       - id: release
         name: get or create the release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           VERSION: ${{ steps.version.outputs.version }}
         with:
@@ -110,7 +110,7 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Linux prerequisites
         if: matrix.platform == 'ubuntu-22.04'

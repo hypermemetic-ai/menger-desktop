@@ -1,6 +1,6 @@
 [package]
 name = "menger-desktop"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "menger as a desktop app — local tickets on this device, or a menger at a URL"
