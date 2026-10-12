@@ -6,3 +6,8 @@
 # Never in the repository: the updater's signing key (DIST-5).
 *.key
 *.key.password
+# Never in the repository: the Android release key (DIST-6) — it lives in
+# ~/.android-keys and in the ANDROID_KEYSTORE_* secrets.
+*.jks
+*.keystore
+keystore.properties

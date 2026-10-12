@@ -1,0 +1,233 @@
+# DIST-6: the mobile builds — Android (a signed APK and AAB) and iOS (a
+# simulator build as a compile check until there is an Apple team, DIST-7).
+#
+# - Run by hand on any branch (Actions → mobile → Run workflow, or
+#   `gh workflow run mobile.yml --ref <branch>`): the builds are uploaded as
+#   workflow artifacts, nothing is released.
+# - Called by release.yml on a v* tag with `release_tag`: the same builds,
+#   uploaded to that tag's release as well. Mobile is not in latest.json —
+#   iOS and Android update through their stores.
+#
+# Android signing: the repository secrets ANDROID_KEYSTORE_BASE64 (the
+# release .jks, base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and
+# ANDROID_KEY_PASSWORD. Without them a hand-run build is unsigned (and says
+# so); a release refuses to be unsigned.
+name: mobile
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "The release (its tag) to attach the builds to"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # tauri-cli 2.12's own (src/mobile/android/mod.rs).
+  ANDROID_PLATFORM: "37.0"
+  NDK_VERSION: "29.0.13846066"
+
+jobs:
+  android:
+    name: android (signed APK + AAB)
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK platform and NDK
+        shell: bash
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" --install "platforms;android-$ANDROID_PLATFORM" "ndk;$NDK_VERSION" >/dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          key: android
+
+      - name: tauri-cli
+        shell: bash
+        run: command -v cargo-tauri >/dev/null || cargo install tauri-cli --version "^2" --locked
+
+      - name: release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$HAS_KEYSTORE" != true ]]; then
+            if [[ -n "$RELEASE_TAG" ]]; then
+              echo "::error::a release needs the ANDROID_KEYSTORE_* secrets"
+              exit 1
+            fi
+            echo "::warning::no ANDROID_KEYSTORE_BASE64 secret — the release APK and AAB are unsigned"
+            exit 0
+          fi
+          umask 077
+          dir="$RUNNER_TEMP/android-keys"
+          mkdir -p "$dir"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$dir/release.jks"
+          {
+            echo "storeFile=$dir/release.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > "$dir/keystore.properties"
+          echo "MENGER_ANDROID_KEYSTORE_PROPERTIES=$dir/keystore.properties" >> "$GITHUB_ENV"
+
+      - name: build
+        working-directory: src-tauri
+        run: cargo tauri android build --apk --aab --ci
+
+      - name: collect and check
+        id: out
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          out=src-tauri/gen/android/app/build/outputs
+          mkdir -p dist
+          cp "$out/apk/universal/release/app-universal-release"*.apk "dist/menger_${version}_android-universal.apk"
+          cp "$out/bundle/universalRelease/app-universal-release.aab" "dist/menger_${version}_android-universal.aab"
+          ls -l dist
+          apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n1)"
+          if [[ "$HAS_KEYSTORE" == true ]]; then
+            "$apksigner" verify --verbose --print-certs "dist/menger_${version}_android-universal.apk" | grep -vi "warning"
+            jarsigner -verify "dist/menger_${version}_android-universal.aab" | tail -n1
+          fi
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            unzip -l "dist/menger_${version}_android-universal.apk" | grep -q "lib/$abi/libmenger_desktop_lib.so" \
+              || { echo "::error::the APK has no lib/$abi/libmenger_desktop_lib.so"; exit 1; }
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: menger-android-${{ steps.out.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: attach to the release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  ios:
+    name: ios (simulator build)
+    runs-on: macos-latest
+    env:
+      HAS_APPLE_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          key: ios
+
+      - name: tauri-cli, xcodegen
+        shell: bash
+        run: |
+          command -v cargo-tauri >/dev/null || cargo install tauri-cli --version "^2" --locked
+          command -v xcodegen >/dev/null || brew install xcodegen
+
+      # The Xcode project is committed (src-tauri/gen/apple); this only runs
+      # on a checkout that lacks it, and uploads what it made.
+      - name: tauri ios init (only when gen/apple is missing)
+        id: init
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          if [[ -d gen/apple ]]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            cargo tauri ios init --ci
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: upload the generated Xcode project
+        if: steps.init.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-gen-apple
+          path: src-tauri/gen/apple
+          include-hidden-files: true
+
+      # A device build of the library: menger and its C dependencies
+      # (ring, bundled SQLite, secp256k1) for aarch64-apple-ios.
+      - name: check the device target
+        working-directory: src-tauri
+        run: cargo check --locked --lib --target aarch64-apple-ios
+
+      - name: build for the simulator (unsigned)
+        working-directory: src-tauri
+        run: cargo tauri ios build --target aarch64-sim --no-sign --ci
+
+      - name: collect
+        id: out
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          app="$(find src-tauri/gen/apple/build/arm64-sim -mindepth 1 -maxdepth 1 -name '*.app' | head -n1)"
+          test -d "$app" || { echo "::error::no simulator .app"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity' "$app/Info.plist"
+          mkdir -p dist
+          ditto -c -k --keepParent "$app" "dist/menger_${version}_ios-simulator-arm64.app.zip"
+          ls -l dist
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # DIST-7: a signed device build needs an Apple team. With the secrets
+      # APPLE_DEVELOPMENT_TEAM, IOS_CERTIFICATE (base64 .p12),
+      # IOS_CERTIFICATE_PASSWORD and IOS_MOBILE_PROVISION (base64), which
+      # tauri-cli reads from the environment, this builds an .ipa. Untested
+      # until the team exists.
+      - name: signed device build (needs an Apple team — DIST-7)
+        if: env.HAS_APPLE_TEAM == 'true'
+        working-directory: src-tauri
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        shell: bash
+        run: |
+          cargo tauri ios build --target aarch64 --export-method app-store-connect --ci
+          cp gen/apple/build/arm64/*.ipa "../dist/menger_${{ steps.out.outputs.version }}_ios.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: menger-ios-${{ steps.out.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: attach to the release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

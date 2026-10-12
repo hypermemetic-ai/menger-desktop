@@ -86,6 +86,17 @@ pub fn parse_remote_url(input: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 
+/// Whether `url` is this device by the names the mobile web views let plain
+/// http reach (DIST-6): `127.0.0.1` or `localhost`, nothing else.
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub fn is_loopback(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +131,16 @@ mod tests {
         assert!(parse_remote_url("ftp://x").is_err());
         assert!(parse_remote_url("file:///etc/passwd").is_err());
         assert!(parse_remote_url("").is_err());
+    }
+
+    #[test]
+    fn loopback_is_127_0_0_1_or_localhost() {
+        let yes = |u: &str| is_loopback(&url::Url::parse(u).unwrap());
+        assert!(yes("http://127.0.0.1:4451/"));
+        assert!(yes("http://localhost:8080/"));
+        assert!(!yes("http://127.0.0.2/"));
+        assert!(!yes("http://192.168.1.10/"));
+        assert!(!yes("http://localhost.example/"));
+        assert!(!yes("https://menger.example/"));
     }
 }

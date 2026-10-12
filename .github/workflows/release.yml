@@ -10,6 +10,11 @@
 # `cargo tauri signer generate`, its contents) and
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD. The public key is in tauri.conf.json.
 # Bundles are not OS-code-signed (DIST-1).
+#
+# DIST-6: the same tag builds Android (a signed APK and AAB) and iOS (a
+# simulator build until there is an Apple team) through mobile.yml and
+# attaches them to the release; they are not in latest.json (mobile updates
+# through the stores), so check-updater-json does not wait for them.
 name: release
 
 on:
@@ -75,6 +80,7 @@ jobs:
                 `menger-desktop ${tag}.`,
                 '',
                 'Linux: the AppImage (or the .deb / .rpm). macOS: the .dmg for your Mac (aarch64 = Apple silicon, x64 = Intel). Windows: the -setup.exe or the .msi.',
+                'Android: the -android-universal.apk (install it directly) or the .aab (for the Play Store). iOS: the -ios-simulator-arm64.app.zip is a simulator build only, until there is an Apple team.',
                 'Installed desktop builds offer this update themselves. The bundles are not OS-code-signed: Gatekeeper and SmartScreen ask before the first run.',
               ].join('\n'),
               draft: false,
@@ -140,6 +146,14 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+
+  mobile:
+    name: mobile
+    needs: create-release
+    uses: ./.github/workflows/mobile.yml
+    with:
+      release_tag: v${{ needs.create-release.outputs.version }}
+    secrets: inherit
 
   check-updater-json:
     name: latest.json lists every platform

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DIST-6: merged by `tauri ios build` into gen/apple's Info.plist. Local mode
+  loads menger from http://127.0.0.1:<port> and opens ws://127.0.0.1:<port>;
+  App Transport Security allows plain http to loopback (and .local names)
+  only with NSAllowsLocalNetworking. Everything else stays https-only.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

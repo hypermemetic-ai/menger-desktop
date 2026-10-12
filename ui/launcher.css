@@ -57,6 +57,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.01em; }
 .choice h2 { margin: 0 0 2px; font-size: 17px; font-weight: 620; }
 .choice p { margin: 0; color: var(--muted); }
 .choice .fine { font-size: 12px; margin-top: 6px; word-break: break-all; }
+#remote-hint { word-break: normal; }
 input {
   font: inherit;
   width: 100%;
